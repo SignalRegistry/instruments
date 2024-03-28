@@ -1,0 +1,6 @@
+# For more info on HTTP files go to https://aka.ms/vs/httpfile
+@Host_Address = http://localhost:7339
+
+
+PUT {{Host_Address}}/move/abs/x/0.5 
+# Content-Type: application/json
