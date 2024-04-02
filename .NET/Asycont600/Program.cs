@@ -1,9 +1,6 @@
 using System.Net.Sockets;
 using System.Xml;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
-
-
 
 String deviceIpAddress = "10.0.0.20";
 Int32  devicePort      = 4000;
@@ -44,93 +41,84 @@ Dictionary<String, String> axesSafeSpeed = new()
   { "azimuth", "1" },
 };
 
-// TcpClient deviceClient;
-// NetworkStream netStream;
-
 try
 {
-
 	// Prefer a using declaration to ensure the instance is Disposed later.
 	TcpClient deviceClient = new(deviceIpAddress, devicePort);
 
 	// Get a client stream for reading and writing.
-	NetworkStream netStream = deviceClient.GetStream();
+	NetworkStream net_stream = deviceClient.GetStream();
   // deviceClient.ReceiveTimeout = 1000;
 
 	var builder = WebApplication.CreateBuilder(args);
-	var app = builder.Build();
-
-	app.MapGet("/", () => {
-		// // Buffer to store the response bytes.
-		// Byte[] data = new Byte[256];
-
-		// // String to store the response ASCII representation.
-		// String responseData = String.Empty;
-
-		// // Read the first batch of the TcpServer response bytes.
-		// Int32 bytes = netStream.Read(data, 0, data.Length);
-		// responseData = System.Text.Encoding.ASCII.GetString(data, 0, bytes);
-		return "Hello World!"; 
-	});
-	app.MapPost("/", () => "Hello World!");
+  builder.Logging.AddJsonConsole();
+  var app = builder.Build();
 
   app.MapPut("/move/{move}/{axis}/{pos}", (String axis, String move, String pos) =>
   {
-
     if (!axes.TryGetValue(axis, out string? value))
     {
       return "Axis not found.";
     }
 
-    XmlDocument doc = new XmlDocument();
-
     if (move == "relative")
     {
-      XmlElement state   = doc.CreateElement("state");
-      XmlElement section = doc.CreateElement("section");
-      XmlElement query   = doc.CreateElement("query");
-      query.SetAttribute("name", "Axis Position");
-      section.SetAttribute("name", "Axis " + axes[axis]);
-      section.AppendChild(query);
-      state.AppendChild(section);
-      doc.AppendChild(state);
-      Console.WriteLine(doc.OuterXml.ToString());
-      netStream.Write(Encoding.ASCII.GetBytes(doc.OuterXml.ToString()));
-
-      Byte[] buffer     = new Byte[1024];
-      int bytesReceived = netStream.Read(buffer);
-      string readData   = Encoding.UTF8.GetString(buffer.AsSpan(0, bytesReceived));
-      Console.WriteLine($"{readData}");
-
-      doc.RemoveAll();
-      doc.LoadXml(readData);
-      XmlNode entry = doc.SelectSingleNode("//state//section//entry") ?? doc.CreateElement("error");
-      if (entry.Attributes is not null && entry.Attributes["v1"] is not null &&  entry.Attributes["v1"].InnerText is not null) {
-        // Console.WriteLine(Convert.ToSingle(entry.Attributes["v1"].InnerText));
-        Single newPos = Convert.ToSingle(entry.Attributes["v1"].InnerText) + Convert.ToSingle(pos);
-        pos = Convert.ToString(newPos); 
-        // Console.WriteLine($"New position {pos}");
-      }
-
+      move_to(net_stream, axis, get_position(net_stream, axis)+Convert.ToDouble(pos));
     }
+    else 
+    {
+      move_to(net_stream, axis, Convert.ToDouble(pos));
+    }
+    return "";
+  });
 
-    doc.RemoveAll();
-    XmlElement el = doc.CreateElement("command");
+  app.MapPut("/reference/{axis}/{pos}", (String axis, String pos) =>
+  {
+    if (!axes.TryGetValue(axis, out string? value))
+    {
+      return "Axis not found.";
+    }
+    set_reference(net_stream, axis, Convert.ToDouble(axis));
+    return "";
+  });
 
-    el.SetAttribute("name", "MoveAbs");
-    el.SetAttribute("axis", value);
-    el.SetAttribute("Acceleration", axesSafeAcceleration[axis]);
-    el.SetAttribute("Deceleration", axesSafeAcceleration[axis]);
-    el.SetAttribute("Velocity", axesSafeSpeed[axis]);
-    el.SetAttribute("Direction", "Auto");
-    el.SetAttribute("Position", pos);
+  
+  app.MapPut("/home/{axis}", (String axis) =>
+  {
+    if (!axes.TryGetValue(axis, out string? value))
+    {
+      return "Axis not found.";
+    }
+    home(net_stream, axis);
+    return "";
+  });
+  
+  app.MapPut("/quick_stop", () =>
+  {
+    quick_stop(net_stream, "x");
+    quick_stop(net_stream, "y");
+    quick_stop(net_stream, "z");
+    quick_stop(net_stream, "pol");
+    quick_stop(net_stream, "slide");
+    quick_stop(net_stream, "azimuth");
+    return "";
+  });
 
-    doc.AppendChild(el);
-    Console.WriteLine(doc.OuterXml.ToString());
-
-    netStream.Write(Encoding.ASCII.GetBytes(doc.OuterXml.ToString()));
-
-    return doc.OuterXml.ToString();
+  app.MapPut("/quick_stop/{axis}", (String axis) =>
+  {
+    if (!axes.TryGetValue(axis, out string? value))
+    {
+      return "Axis not found.";
+    }
+    quick_stop(net_stream, axis);
+    return "";
+  });
+  
+  app.MapPut("/bringxy", () =>
+  {
+    move_to(net_stream, "x", get_lower_limit(net_stream, "x"));
+    move_to(net_stream, "y", get_lower_limit(net_stream, "y")+0.5);
+    return "";
   });
 
 	app.MapDelete("/", () => "Hello World!");
@@ -144,5 +132,134 @@ catch (ArgumentNullException e)
 catch (SocketException e)
 {
 	Console.WriteLine("SocketException: {0}", e);
+}
+
+Double get_position(NetworkStream net_stream, String axis)
+{
+    XmlDocument doc = new XmlDocument();
+    XmlElement  state;
+    XmlElement  section;
+    XmlElement  query;
+    XmlNode     entry;
+
+    Byte[] buffer = new Byte[1024];
+    int bytes_received = 0;
+    String read_data = new("");
+
+    state   = doc.CreateElement("par");
+    section = doc.CreateElement("section");
+    query   = doc.CreateElement("query");
+    query.SetAttribute("name", "Position");
+    section.SetAttribute("name", "Axis "+axes[axis]);
+    section.AppendChild(query);
+    state.AppendChild(section);
+    doc.AppendChild(state);
+    net_stream.Write(Encoding.ASCII.GetBytes(doc.OuterXml.ToString()));
+
+    bytes_received = net_stream.Read(buffer);
+    read_data      = Encoding.UTF8.GetString(buffer.AsSpan(0, bytes_received));
+
+    doc.RemoveAll();
+    doc.LoadXml(read_data);
+    entry = doc.SelectSingleNode("//par//section//entry") ?? doc.CreateElement("error");
+    try
+    {
+      return Convert.ToDouble(entry.Attributes["v1"].InnerText.Substring(0, Math.Min(entry.Attributes["v1"].InnerText.Length,entry.Attributes["v1"].InnerText.IndexOf('.') + 5)));
+    }
+    catch (System.NullReferenceException e)
+    {
+      Console.WriteLine("ArgumentNullException: {0}", e.ToString());
+      return 0;
+    }
+}
+
+void move_to(NetworkStream net_stream, String axis, Double position)
+{
+    XmlDocument doc = new XmlDocument();
+    XmlElement  el  = doc.CreateElement("command");
+
+    el.SetAttribute("name", "MoveAbs");
+    el.SetAttribute("axis", axis);
+    el.SetAttribute("Acceleration", axesSafeAcceleration[axis]);
+    el.SetAttribute("Deceleration", axesSafeAcceleration[axis]);
+    el.SetAttribute("Velocity", axesSafeSpeed[axis]);
+    el.SetAttribute("Direction", "Auto");
+    el.SetAttribute("Position", position.ToString());
+    doc.AppendChild(el);
+    try
+    {
+      net_stream.Write(Encoding.ASCII.GetBytes(doc.OuterXml.ToString()));
+    }
+    catch (System.NullReferenceException e)
+    {
+      Console.WriteLine("ArgumentNullException: {0}", e.ToString());
+    }
+}
+
+Double get_lower_limit(NetworkStream net_stream, String axis)
+{
+    XmlDocument doc = new XmlDocument();
+    XmlElement  state;
+    XmlElement  section;
+    XmlElement  query;
+    XmlNode     entry;
+
+    Byte[] buffer = new Byte[1024];
+    int bytes_received = 0;
+    String read_data = new("");
+
+    state   = doc.CreateElement("par");
+    section = doc.CreateElement("section");
+    query   = doc.CreateElement("query");
+    query.SetAttribute("name", "Position");
+    section.SetAttribute("name", "Axis "+axes[axis]);
+    section.AppendChild(query);
+    state.AppendChild(section);
+    doc.AppendChild(state);
+    net_stream.Write(Encoding.ASCII.GetBytes(doc.OuterXml.ToString()));
+
+    bytes_received = net_stream.Read(buffer);
+    read_data      = Encoding.UTF8.GetString(buffer.AsSpan(0, bytes_received));
+
+    doc.RemoveAll();
+    doc.LoadXml(read_data);
+    entry = doc.SelectSingleNode("//par//section//entry") ?? doc.CreateElement("error");
+    try
+    {
+      return Convert.ToDouble(entry.Attributes["min"].InnerText.Substring(0, entry.Attributes["min"].InnerText.IndexOf('.') + 5));
+    }
+    catch (System.NullReferenceException e)
+    {
+      Console.WriteLine("ArgumentNullException: {0}", e.ToString());
+      return 0;
+    }
+}
+
+void quick_stop(NetworkStream net_stream, String axis) {
+  XmlDocument doc = new XmlDocument();
+  XmlElement  el  = doc.CreateElement("command");
+  el.SetAttribute("name", "QuickStop");
+  el.SetAttribute("axis", "Axis " + axes[axis]);
+  doc.AppendChild(el);
+  net_stream.Write(Encoding.ASCII.GetBytes(doc.OuterXml.ToString()));
+}
+
+void home(NetworkStream net_stream, String axis) {
+  XmlDocument doc = new XmlDocument();
+  XmlElement  el  = doc.CreateElement("command");
+  el.SetAttribute("name", "Reference");
+  el.SetAttribute("axis", "Axis " + axes[axis]);
+  doc.AppendChild(el);
+  net_stream.Write(Encoding.ASCII.GetBytes(doc.OuterXml.ToString()));
+}
+
+void set_reference(NetworkStream net_stream, String axis, Double offset) {
+  XmlDocument doc = new XmlDocument();
+  XmlElement el   = doc.CreateElement("command");
+  el.SetAttribute("name", "Reference");
+  el.SetAttribute("axis", "Axis " + axes[axis]);
+  el.SetAttribute("NewPosition", offset.ToString());
+  doc.AppendChild(el);
+  net_stream.Write(Encoding.ASCII.GetBytes(doc.OuterXml.ToString()));
 }
 
