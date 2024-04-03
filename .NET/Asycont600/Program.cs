@@ -5,40 +5,36 @@ using System.Text;
 String deviceIpAddress = "10.0.0.20";
 Int32  devicePort      = 4000;
 
-Dictionary<String, String> moves = new()
-{
-  { "abs", "MoveAbs" },
-  { "rel", "MoveRel" }
-};
+Int32 acknowledge_count = 6;
 
 Dictionary<String, String> axes = new()
 {
-  { "x", "1" },
-  { "y", "2" },
-  { "z", "3" },
-  { "pol", "4" },
-  { "slide", "5" },
+  { "x",       "1" },
+  { "y",       "2" },
+  { "z",       "3" },
+  { "pol",     "4" },
+  { "slide",   "5" },
   { "azimuth", "6" },
 };
 
 Dictionary<String, String> axesSafeAcceleration = new()
 {
-  { "x", "0.05" },
-  { "y", "0.1" },
-  { "z", "0.1" },
-  { "pol", "10" },
-  { "slide", "0.01" },
-  { "azimuth", "1" },
+  { "x",       "0.05" },
+  { "y",       "0.1"  },
+  { "z",       "0.1"  },
+  { "pol",     "10"   },
+  { "slide",   "0.01" },
+  { "azimuth", "1"    },
 };
 
 Dictionary<String, String> axesSafeSpeed = new()
 {
-  { "x", "0.1" },
-  { "y", "0.2" },
-  { "z", "0.02" },
-  { "pol", "10" },
-  { "slide", "0.01" },
-  { "azimuth", "1" },
+  { "x",        "0.1"  },
+  { "y",        "0.2"  },
+  { "z",        "0.02" },
+  { "pol",      "10"   },
+  { "slide",    "0.01" },
+  { "azimuth",  "1"    },
 };
 
 try
@@ -54,32 +50,32 @@ try
   builder.Logging.AddJsonConsole();
   var app = builder.Build();
 
-  app.MapPut("/move/{move}/{axis}/{pos}", (String axis, String move, String pos) =>
+  app.MapPut("/move/{move_type}/{axis}/{position}", (String axis, String move_type, String position) =>
   {
     if (!axes.TryGetValue(axis, out string? value))
     {
-      return "Axis not found.";
+      return Results.Json("{ 'error': 'Axis not found'}", contentType: "application/json");
     }
 
-    if (move == "relative")
+    if (move_type == "relative")
     {
-      move_to(net_stream, axis, get_position(net_stream, axis)+Convert.ToDouble(pos));
+      move_to(net_stream, axis, get_position(net_stream, axis)+Convert.ToDouble(position));
     }
     else 
     {
-      move_to(net_stream, axis, Convert.ToDouble(pos));
+      move_to(net_stream, axis, Convert.ToDouble(position));
     }
-    return "";
+    return Results.Json("{}", contentType: "application/json");
   });
 
-  app.MapPut("/reference/{axis}/{pos}", (String axis, String pos) =>
+  app.MapPut("/reference/{axis}/{position}", (String axis, String position) =>
   {
     if (!axes.TryGetValue(axis, out string? value))
     {
-      return "Axis not found.";
+      return Results.Json("{ 'error': 'Axis not found'}", contentType: "application/json");
     }
-    set_reference(net_stream, axis, Convert.ToDouble(pos));
-    return "";
+    set_reference(net_stream, axis, Convert.ToDouble(position));
+    return Results.Json("{}", contentType: "application/json");
   });
 
   
@@ -87,10 +83,10 @@ try
   {
     if (!axes.TryGetValue(axis, out string? value))
     {
-      return "Axis not found.";
+      return Results.Json("{ 'error': 'Axis not found'}", contentType: "application/json");
     }
     home(net_stream, axis);
-    return "";
+    return Results.Json("{}", contentType: "application/json");
   });
   
   app.MapPut("/quick_stop", () =>
@@ -101,24 +97,24 @@ try
     quick_stop(net_stream, "pol");
     quick_stop(net_stream, "slide");
     quick_stop(net_stream, "azimuth");
-    return "";
+    return Results.Json("{}", contentType: "application/json");
   });
 
   app.MapPut("/quick_stop/{axis}", (String axis) =>
   {
     if (!axes.TryGetValue(axis, out string? value))
     {
-      return "Axis not found.";
+      return Results.Json("{ 'error': 'Axis not found'}", contentType: "application/json");
     }
     quick_stop(net_stream, axis);
-    return "";
+    return Results.Json("{}", contentType: "application/json");
   });
   
   app.MapPut("/bringxy", () =>
   {
     move_to(net_stream, "x", get_lower_limit(net_stream, "x"));
     move_to(net_stream, "y", get_lower_limit(net_stream, "y")+0.5);
-    return "";
+    return Results.Json("{}", contentType: "application/json");
   });
 
 	app.MapDelete("/", () => "Hello World!");
@@ -136,13 +132,12 @@ catch (SocketException e)
 
 Double get_position(NetworkStream net_stream, String axis)
 {
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
+	for (int i = 0; i < acknowledge_count; i++)
+	{
+		acknowledge(net_stream);
+	}
 
-  XmlDocument doc = new XmlDocument();
+	XmlDocument doc = new XmlDocument();
   XmlElement  state;
   XmlElement  section;
   XmlElement  query;
@@ -170,7 +165,9 @@ Double get_position(NetworkStream net_stream, String axis)
   entry = doc.SelectSingleNode("//par//section//entry") ?? doc.CreateElement("error");
   try
   {
+#pragma warning disable CS8602 // Dereference of a possibly null reference.
     return Convert.ToDouble(entry.Attributes["v1"].InnerText.Substring(0, Math.Min(entry.Attributes["v1"].InnerText.Length,entry.Attributes["v1"].InnerText.IndexOf('.') + 5)));
+#pragma warning restore CS8602 // Dereference of a possibly null reference.
   }
   catch (System.NullReferenceException e)
   {
@@ -181,13 +178,12 @@ Double get_position(NetworkStream net_stream, String axis)
 
 void move_to(NetworkStream net_stream, String axis, Double position)
 {
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
+	for (int i = 0; i < acknowledge_count; i++)
+	{
+		acknowledge(net_stream);
+	}
 
-  XmlDocument doc = new XmlDocument();
+	XmlDocument doc = new XmlDocument();
   XmlElement  el  = doc.CreateElement("command");
 
   el.SetAttribute("name", "MoveAbs");
@@ -210,11 +206,10 @@ void move_to(NetworkStream net_stream, String axis, Double position)
 
 Double get_lower_limit(NetworkStream net_stream, String axis)
 {
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
+  for (int i = 0; i<acknowledge_count; i++)
+  {
+		acknowledge(net_stream);
+	}
 
   XmlDocument doc = new XmlDocument();
   XmlElement  state;
@@ -244,7 +239,9 @@ Double get_lower_limit(NetworkStream net_stream, String axis)
   entry = doc.SelectSingleNode("//par//section//entry") ?? doc.CreateElement("error");
   try
   {
-    return Convert.ToDouble(entry.Attributes["min"].InnerText.Substring(0, entry.Attributes["min"].InnerText.IndexOf('.') + 5));
+#pragma warning disable CS8602 // Dereference of a possibly null reference.
+    return Convert.ToDouble(entry.Attributes?["min"]?.InnerText[..(entry.Attributes["min"].InnerText.IndexOf('.') + 5)]);
+#pragma warning restore CS8602 // Dereference of a possibly null reference.
   }
   catch (System.NullReferenceException e)
   {
@@ -254,11 +251,11 @@ Double get_lower_limit(NetworkStream net_stream, String axis)
 }
 
 void quick_stop(NetworkStream net_stream, String axis) {
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
+	for (int i = 0; i < acknowledge_count; i++)
+	{
+		acknowledge(net_stream);
+	}
+
   XmlDocument doc = new XmlDocument();
   XmlElement  el  = doc.CreateElement("command");
   el.SetAttribute("name", "QuickStop");
@@ -268,11 +265,11 @@ void quick_stop(NetworkStream net_stream, String axis) {
 }
 
 void home(NetworkStream net_stream, String axis) {
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
+	for (int i = 0; i < acknowledge_count; i++)
+	{
+		acknowledge(net_stream);
+	}
+
   XmlDocument doc = new XmlDocument();
   XmlElement  el  = doc.CreateElement("command");
   el.SetAttribute("name", "Reference");
@@ -282,12 +279,12 @@ void home(NetworkStream net_stream, String axis) {
 }
 
 void set_reference(NetworkStream net_stream, String axis, Double offset) {
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  acknowledge(net_stream);
-  XmlDocument doc = new XmlDocument();
+	for (int i = 0; i < acknowledge_count; i++)
+	{
+		acknowledge(net_stream);
+	}
+
+	XmlDocument doc = new XmlDocument();
   XmlElement el   = doc.CreateElement("command");
   el.SetAttribute("name", "Reference");
   el.SetAttribute("axis", "Axis " + axes[axis]);
@@ -303,4 +300,3 @@ void acknowledge(NetworkStream net_stream) {
   doc.AppendChild(el);
   net_stream.Write(Encoding.ASCII.GetBytes(doc.OuterXml.ToString()));
 }
-

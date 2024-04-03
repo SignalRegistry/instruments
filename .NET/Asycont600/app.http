@@ -1,7 +1,5 @@
 # For more info on HTTP files go to https://aka.ms/vs/httpfile
-@Host_Address = {{Host_Address}}
-
-PUT {{Host_Address}}/move/absolute/x/0.1
+@Host_Address = http://127.0.0.1:7339
 
 ################################################################################
 # Pol Axis Hand Terminal
